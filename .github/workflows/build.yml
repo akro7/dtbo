@@ -19,7 +19,7 @@ jobs:
 
     - name: Unpack dtbo.img
       run: |
-        mkdir workspace
+        mkdir -p workspace
         cp dtbo.img workspace/
         cd workspace
         python3 ../mkdtboimg.py dump dtbo.img -b dtb > dump.txt
@@ -29,14 +29,17 @@ jobs:
         cd workspace
         for file in dtb.*; do
           if [ -f "$file" ]; then
+            # Try to decompile, skip if it fails
             dtc -I dtb -O dts -o "${file}.dts" "$file" 2>/dev/null || continue
 
+            # High precision replacement for 75Hz (Dec: 75, Hex: 0x4b)
             sed -i -E 's/([a-zA-Z0-9_-]*panel-framerate[a-zA-Z0-9_-]*\s*=\s*<)[0-9]+(>)/\175\2/g' "${file}.dts"
             sed -i -E 's/([a-zA-Z0-9_-]*panel-framerate[a-zA-Z0-9_-]*\s*=\s*<0x)[0-9a-fA-F]+(>)/\14b\2/g' "${file}.dts"
 
             sed -i -E 's/([a-zA-Z0-9_-]*fps[a-zA-Z0-9_-]*\s*=\s*<)[0-9]+(>)/\175\2/g' "${file}.dts"
             sed -i -E 's/([a-zA-Z0-9_-]*fps[a-zA-Z0-9_-]*\s*=\s*<0x)[0-9a-fA-F]+(>)/\14b\2/g' "${file}.dts"
 
+            # Recompile to dtb
             dtc -I dts -O dtb -o "$file" "${file}.dts" 2>/dev/null || true
           fi
         done
@@ -45,25 +48,35 @@ jobs:
       run: |
         cat << 'EOF' > repack.py
         import os
+
+        def get_val(line):
+            if ':' in line:
+                parts = line.split(':')
+                if len(parts) > 1:
+                    return parts[1].strip()
+            return None
+
         with open('workspace/dump.txt', 'r') as f:
             lines = f.readlines()
+
         cmd = ["python3", "mkdtboimg.py", "create", "dtbo-patched.img"]
+        
         for line in lines:
+            line = line.strip()
             if line.startswith("dt_table_entry"):
                 idx = line.split("[")[1].split("]")[0]
                 cmd.append(f"workspace/dtb.{idx}")
-            elif "id :" in line:
-                cmd.append(f"--id={line.split(':')[1].strip()}")
-            elif "rev :" in line:
-                cmd.append(f"--rev={line.split(':')[1].strip()}")
-            elif "custom[0]" in line:
-                cmd.append(f"--custom0={line.split(':')[1].strip()}")
-            elif "custom[1]" in line:
-                cmd.append(f"--custom1={line.split(':')[1].strip()}")
-            elif "custom[2]" in line:
-                cmd.append(f"--custom2={line.split(':')[1].strip()}")
-            elif "custom[3]" in line:
-                cmd.append(f"--custom3={line.split(':')[1].strip()}")
+            else:
+                val = get_val(line)
+                if val is not None and val != "":
+                    if "id :" in line: cmd.append(f"--id={val}")
+                    elif "rev :" in line: cmd.append(f"--rev={val}")
+                    elif "custom[0]" in line: cmd.append(f"--custom0={val}")
+                    elif "custom[1]" in line: cmd.append(f"--custom1={val}")
+                    elif "custom[2]" in line: cmd.append(f"--custom2={val}")
+                    elif "custom[3]" in line: cmd.append(f"--custom3={val}")
+
+        print(f"Executing: {' '.join(cmd)}")
         os.system(" ".join(cmd))
         EOF
         python3 repack.py
